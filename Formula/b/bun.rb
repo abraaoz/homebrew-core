@@ -3,8 +3,8 @@ class Bun < Formula
   homepage "https://bun.com/"
   # Need git checkout to build. Alternatively could set GIT_SHA if we extract the commit.
   url "https://github.com/oven-sh/bun.git",
-      tag:      "bun-v1.4.0",
-      revision: "34cbb9a40b4bd1bd767d134a7065e66c2432a676"
+      tag:      "bun-v1.4.2",
+      revision: "744846f844374847c902b5e7fd59b4342a51ef99"
   license all_of: [
     "MIT",
     "LGPL-2.0-or-later", # JavaScriptCore
@@ -85,8 +85,9 @@ class Bun < Formula
     end
   end
 
-  # Work around superenv only supporting unversioned LLVM which results in enabling
-  # unsupported SVE code. Based on LLVM 22 PR https://github.com/oven-sh/bun/pull/34299
+  # `return {};` from a `-> void` lambda is ill-formed; clang accepted it until 22.
+  # superenv builds this with the unversioned `llvm` (23), not the `llvm@21` upstream
+  # pins, so it is rejected here.
   patch :DATA
 
   # Performing a manual shallow git clone since a full clone of WebKit repo is ~18GB in size
@@ -121,6 +122,10 @@ class Bun < Formula
     # as part of compilation occurs outside of our superenv.
     if Hardware::CPU.intel?
       inreplace "scripts/build/flags.ts", "-march=nehalem", ENV["HOMEBREW_OPTFLAGS"].to_s
+      # 1.4.1 raised libspng's x64 SIMD floor from SSE2 to SSE4.1 to match the
+      # nehalem target replaced above. Our baseline has no SSE4.1, and the
+      # defilter paths are `always_inline`, so drop back to the 1.4.0 level.
+      inreplace "scripts/build/deps/libspng.ts", "{ SPNG_SSE: 4 }", "{ SPNG_SSE: 1 }"
     elsif OS.linux? && Hardware::CPU.arm64?
       inreplace "scripts/build/flags.ts", "-march=armv8-a+crc", ENV["HOMEBREW_OPTFLAGS"].to_s
     end
@@ -131,6 +136,9 @@ class Bun < Formula
 
     args = ["--canary=off"]
     args << "--baseline=on" if Hardware::CPU.intel?
+    # Unless it detects CI, bun takes the deployment target from the SDK's major
+    # version, so Xcode 27 on macOS 26 would build everything `minos 27.0`.
+    args << "--osx-deployment-target=#{MacOS.version}" if OS.mac?
 
     system "bun", "run", "build:release:local", *args
     bin.install "build/release-local/bun"
@@ -169,54 +177,69 @@ class Bun < Formula
 end
 
 __END__
-diff --git a/src/jsc/bindings/highway_json.cpp b/src/jsc/bindings/highway_json.cpp
-index d3fba90f25a1..e6e1180cd2ce 100644
---- a/src/jsc/bindings/highway_json.cpp
-+++ b/src/jsc/bindings/highway_json.cpp
-@@ -1,6 +1,12 @@
- // SIMD structural indexer for JSON (simdjson-style "stage 1"), runtime-dispatched via Google
- // Highway. Plain JSON only: a `/` or `'` outside a string sets BUN_JSON_IDX_ODDITY and returns.
+diff --git a/src/jsc/bindings/JSCommonJSModule.cpp b/src/jsc/bindings/JSCommonJSModule.cpp
+index 484a719..7d43b31 100644
+--- a/src/jsc/bindings/JSCommonJSModule.cpp
++++ b/src/jsc/bindings/JSCommonJSModule.cpp
+@@ -1568,7 +1568,7 @@ static JSC::SourceCode commonJSModuleSyntheticSourceCode(const SourceOrigin& sou
  
-+// BitsFromMask needs a fixed-width vector; Highway only provides it for the
-+// fixed-size SVE_256/SVE2_128 variants, not scalable SVE/SVE2. clang >= 22
-+// stops marking scalable SVE as HWY_BROKEN, so disable it here explicitly.
-+#undef HWY_DISABLED_TARGETS
-+#define HWY_DISABLED_TARGETS (HWY_SVE | HWY_SVE2)
-+
- #undef HWY_TARGET_INCLUDE
- #define HWY_TARGET_INCLUDE "highway_json.cpp"
- #include <hwy/foreach_target.h>
-diff --git a/src/jsc/bindings/highway_sourcemap.cpp b/src/jsc/bindings/highway_sourcemap.cpp
-index 653cdb5ee8cf..46e0a27de005 100644
---- a/src/jsc/bindings/highway_sourcemap.cpp
-+++ b/src/jsc/bindings/highway_sourcemap.cpp
-@@ -34,6 +34,12 @@
- //   Muła, "SIMD base64 decoding"  http://0x80.pl/notesen/2016-01-17-sse-base64-decoding.html
- //   Lemire & Boytsov, "Masked VByte"  https://arxiv.org/abs/1503.07387
+                 JSValue keyValue = identifierToJSValue(vm, moduleKey);
+                 JSValue entry = globalObject->requireMap()->get(globalObject, keyValue);
+-                RETURN_IF_EXCEPTION(scope, {});
++                RETURN_IF_EXCEPTION(scope, void());
  
-+// BitsFromMask needs a fixed-width vector; Highway only provides it for the
-+// fixed-size SVE_256/SVE2_128 variants, not scalable SVE/SVE2. clang >= 22
-+// stops marking scalable SVE as HWY_BROKEN, so disable it here explicitly.
-+#undef HWY_DISABLED_TARGETS
-+#define HWY_DISABLED_TARGETS (HWY_SVE | HWY_SVE2)
-+
- #undef HWY_TARGET_INCLUDE
- #define HWY_TARGET_INCLUDE "highway_sourcemap.cpp"
- #include <hwy/foreach_target.h> // Must come before highway.h
-diff --git a/src/jsc/bindings/highway_xml.cpp b/src/jsc/bindings/highway_xml.cpp
-index c7b206412e..6553e3a57e 100644
---- a/src/jsc/bindings/highway_xml.cpp
-+++ b/src/jsc/bindings/highway_xml.cpp
-@@ -4,6 +4,12 @@
- // U+FFFE / U+FFFF, EF BF BE|BF; units: 0xFFFE / 0xFFFF), and, between a `<` and the next `>`, of
- // every `\t`, `\n`, `"`, `'` and `=` as well.
+                 if (entry) {
+                     if (auto* moduleObject = dynamicDowncast<JSCommonJSModule>(entry)) {
+@@ -1587,7 +1587,7 @@ static JSC::SourceCode commonJSModuleSyntheticSourceCode(const SourceOrigin& sou
+                                 // On error, remove the module from the require map
+                                 // so that it can be re-evaluated on the next require.
+                                 globalObject->requireMap()->remove(globalObject, moduleObject->filename());
+-                                RETURN_IF_EXCEPTION(scope, {});
++                                RETURN_IF_EXCEPTION(scope, void());
  
-+// BitsFromMask needs a fixed-width vector; Highway only provides it for the
-+// fixed-size SVE_256/SVE2_128 variants, not scalable SVE/SVE2. clang >= 22
-+// stops marking scalable SVE as HWY_BROKEN, so disable it here explicitly.
-+#undef HWY_DISABLED_TARGETS
-+#define HWY_DISABLED_TARGETS (HWY_SVE | HWY_SVE2)
-+
- #undef HWY_TARGET_INCLUDE
- #define HWY_TARGET_INCLUDE "highway_xml.cpp"
- #include <hwy/foreach_target.h>
+                                 scope.throwException(globalObject, exception);
+                                 return;
+@@ -1595,7 +1595,7 @@ static JSC::SourceCode commonJSModuleSyntheticSourceCode(const SourceOrigin& sou
+                         }
+ 
+                         moduleObject->toSyntheticSource(globalObject, moduleKey, exportNames, exportValues);
+-                        RETURN_IF_EXCEPTION(scope, {});
++                        RETURN_IF_EXCEPTION(scope, void());
+                     }
+                 } else {
+                     // require map was cleared of the entry
+diff --git a/src/jsc/bindings/JSMockFunction.cpp b/src/jsc/bindings/JSMockFunction.cpp
+index bc8f149..dfe5e15 100644
+--- a/src/jsc/bindings/JSMockFunction.cpp
++++ b/src/jsc/bindings/JSMockFunction.cpp
+@@ -897,7 +897,7 @@ JSC_DEFINE_HOST_FUNCTION(jsMockFunctionCall, (JSGlobalObject * lexicalGlobalObje
+     auto setReturnValue = [&](JSC::JSValue value) -> void {
+         if (auto* returnValuesArray = fn->returnValues.get()) {
+             returnValuesArray->push(globalObject, value);
+-            RETURN_IF_EXCEPTION(scope, {});
++            RETURN_IF_EXCEPTION(scope, void());
+             returnValueIndex = returnValuesArray->length() - 1;
+         } else {
+             JSC::ObjectInitializationScope object(vm);
+diff --git a/src/jsc/modules/ObjectModule.cpp b/src/jsc/modules/ObjectModule.cpp
+index 5505408..4311d5b 100644
+--- a/src/jsc/modules/ObjectModule.cpp
++++ b/src/jsc/modules/ObjectModule.cpp
+@@ -47,7 +47,7 @@ generateObjectModuleSourceCodeForJSON(JSC::JSGlobalObject* globalObject,
+         PropertyNameArrayBuilder properties(vm, PropertyNameMode::Strings,
+             PrivateSymbolMode::Exclude);
+         object->getPropertyNames(globalObject, properties, DontEnumPropertiesMode::Exclude);
+-        RETURN_IF_EXCEPTION(scope, {});
++        RETURN_IF_EXCEPTION(scope, void());
+         gcUnprotectNullTolerant(object);
+ 
+         exportNames.append(vm.propertyNames->defaultKeyword);
+@@ -61,7 +61,7 @@ generateObjectModuleSourceCodeForJSON(JSC::JSGlobalObject* globalObject,
+             exportNames.append(entry);
+ 
+             JSValue value = object->get(globalObject, entry);
+-            RETURN_IF_EXCEPTION(scope, {});
++            RETURN_IF_EXCEPTION(scope, void());
+             exportValues.append(value);
+         }
+     };
