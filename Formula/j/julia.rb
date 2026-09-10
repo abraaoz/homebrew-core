@@ -2,8 +2,8 @@ class Julia < Formula
   desc "Fast, Dynamic Programming Language"
   homepage "https://julialang.org/"
   # Use the `-full` tarball to avoid having to download during the build.
-  url "https://github.com/JuliaLang/julia/releases/download/v1.12.7/julia-1.12.7-full.tar.gz"
-  sha256 "5c7d85b771de3185eeca9fbc2e6173d8bcf6d74f68418622a9e9c43ad752af51"
+  url "https://github.com/JuliaLang/julia/releases/download/v1.13.0/julia-1.13.0-full.tar.gz"
+  sha256 "6b7f8eecb208b2fffc95cec6713a06c94f51bcbc5616630c30b42bd9221cb26e"
   license all_of: ["MIT", "BSD-3-Clause", "Apache-2.0", "BSL-1.0"]
   head "https://github.com/JuliaLang/julia.git", branch: "master"
 
@@ -57,6 +57,13 @@ class Julia < Formula
   conflicts_with "juliaup", because: "both install `julia` binaries"
 
   def install
+    # Fix LLVM benchmark thread safety annotations
+    # TODO: Remove this workaround once the upstream LLVM benchmark issue is fixed.
+    inreplace buildpath/"deps/srccache/llvm-julia-20.1.8-2/third-party/benchmark/src/thread_manager.h" do |s|
+      s.gsub!(/GUARDED_BY\(GetBenchmarkMutex\(\)\)\s+Result results;/,
+              "Result results;")
+    end
+
     # Build documentation available at
     # https://github.com/JuliaLang/julia/blob/v#{version}/doc/build/build.md
     args = %W[
