@@ -130,6 +130,11 @@ class Bun < Formula
       inreplace "scripts/build/flags.ts", "-march=armv8-a+crc", ENV["HOMEBREW_OPTFLAGS"].to_s
     end
 
+    # Nested dep builds run `cmake --build` without `--parallel`, four at a time
+    # (the `dep` ninja pool), so each one spawns its own core-count worth of
+    # compilers on top of the outer build and Homebrew's job limit is ignored.
+    ENV["CMAKE_BUILD_PARALLEL_LEVEL"] = ENV.make_jobs.to_s
+
     fetch_webkit
     resource("bootstrap").stage("bootstrap")
     ENV.prepend_path "PATH", buildpath/"bootstrap"
